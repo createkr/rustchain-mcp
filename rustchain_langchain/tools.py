@@ -1,16 +1,16 @@
 """
-RustChain + BoTTube LangChain Tools
-====================================
+RustChain + BoTTube + Beacon LangChain Tools
+==============================================
 Drop-in tools for LangChain and CrewAI agents.
 Built on createkr's RustChain Python SDK.
 
 Usage with LangChain:
-    from rustchain_langchain import rustchain_balance, bottube_search
-    agent = initialize_agent([rustchain_balance, bottube_search], llm)
+    from rustchain_langchain import rustchain_balance, bottube_search, beacon_discover
+    agent = initialize_agent([rustchain_balance, bottube_search, beacon_discover], llm)
 
 Usage with CrewAI:
-    from rustchain_langchain import rustchain_balance
-    agent = Agent(tools=[rustchain_balance])
+    from rustchain_langchain import rustchain_balance, beacon_discover
+    agent = Agent(tools=[rustchain_balance, beacon_discover])
 """
 
 import os
@@ -30,6 +30,7 @@ except ImportError:
 
 RUSTCHAIN_NODE = os.environ.get("RUSTCHAIN_NODE", "https://50.28.86.131")
 BOTTUBE_URL = os.environ.get("BOTTUBE_URL", "https://bottube.ai")
+BEACON_URL = os.environ.get("BEACON_URL", "https://rustchain.org/beacon")
 
 
 def _get(url: str, params: dict = None, timeout: int = 30) -> dict:
@@ -194,3 +195,68 @@ def bottube_upload(title: str, video_url: str, description: str = "", tags: str 
     )
     video_id = data.get("id", data.get("video_id", "unknown"))
     return f"Video uploaded! ID: {video_id}, Watch at: https://bottube.ai/watch/{video_id}"
+
+
+# ═══════════════════════════════════════════════════════════════
+# BEACON TOOLS — Agent-to-agent communication
+# ═══════════════════════════════════════════════════════════════
+
+@tool
+def beacon_discover(capability: str = "") -> str:
+    """Discover AI agents on the Beacon network. Filter by capability
+    (coding, research, creative, video-production, blockchain, etc.).
+
+    Args:
+        capability: Filter by capability. Empty = list all agents.
+    """
+    data = _get(f"{BEACON_URL}/api/agents")
+    agents = data if isinstance(data, list) else []
+    if capability:
+        agents = [a for a in agents if capability.lower() in
+                  [c.lower() for c in a.get("capabilities", [])]]
+    lines = [f"Beacon agents: {len(agents)}"]
+    for a in agents[:15]:
+        name = a.get("name", a.get("agent_id", "?"))
+        status = a.get("status", "unknown")
+        relay = " (relay)" if a.get("relay") else ""
+        lines.append(f"  {a['agent_id']}: {name} [{status}]{relay}")
+    if len(agents) > 15:
+        lines.append(f"  ... and {len(agents) - 15} more")
+    return "\n".join(lines)
+
+
+@tool
+def beacon_network_stats() -> str:
+    """Get Beacon network statistics — total agents, active count, provider breakdown."""
+    data = _get(f"{BEACON_URL}/relay/stats")
+    lines = [
+        "Beacon Network Stats",
+        f"  Native agents: {data.get('native_agents', 0)}",
+        f"  Relay agents: {data.get('total_relay_agents', 0)}",
+        f"  Active: {data.get('active', 0)}",
+        f"  Silent: {data.get('silent', 0)}",
+        f"  Presumed dead: {data.get('presumed_dead', 0)}",
+    ]
+    providers = data.get("by_provider", {})
+    if providers:
+        lines.append("  By provider:")
+        for p, count in sorted(providers.items(), key=lambda x: -x[1]):
+            lines.append(f"    {p}: {count}")
+    return "\n".join(lines)
+
+
+@tool
+def beacon_chat(agent_id: str, message: str) -> str:
+    """Chat with a native Beacon agent (Sophia Elya, Boris Volkov, DeepSeeker, etc.).
+
+    Args:
+        agent_id: Agent to chat with (e.g., "bcn_sophia_elya", "bcn_deep_seeker")
+        message: Your message
+    """
+    data = _post(
+        f"{BEACON_URL}/api/chat",
+        json_data={"agent_id": agent_id, "message": message},
+    )
+    agent = data.get("agent", "Unknown")
+    response = data.get("response", "No response")
+    return f"{agent}: {response}"
