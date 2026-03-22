@@ -23,9 +23,12 @@ License: MIT
 """
 
 import os
+import time
 
 import httpx
 from fastmcp import FastMCP
+
+from . import rustchain_crypto
 
 # ── Configuration ──────────────────────────────────────────────
 RUSTCHAIN_NODE = os.environ.get("RUSTCHAIN_NODE", "https://50.28.86.131")
@@ -141,6 +144,211 @@ def rustchain_balance(wallet_id: str) -> dict:
     return r.json()
 
 
+# ═══════════════════════════════════════════════════════════════
+# WALLET MANAGEMENT TOOLS (Issue #2302)
+# 7 new tools for wallet management and signed transfers
+# ═══════════════════════════════════════════════════════════════
+
+@mcp.tool()
+def wallet_create(agent_name: str, password: str = "") -> dict:
+    """Create a new Ed25519 wallet with BIP39 seed phrase.
+
+    Generates a new wallet with secure key storage in ~/.rustchain/mcp_wallets/.
+    The wallet uses Ed25519 cryptography compatible with RustChain blockchain.
+
+    Args:
+        agent_name: Name for the wallet (e.g., "my-agent", "trading-bot")
+        password: Optional password to encrypt the keystore (default: use wallet_id)
+
+    Returns wallet_id, address, and public_key.
+    NOTE: Seed phrase is encrypted and stored securely - never exposed in responses!
+    """
+    result = rustchain_crypto.create_wallet(agent_name, password)
+    return {
+        "wallet_id": result["wallet_id"],
+        "address": result["address"],
+        "public_key": result["public_key"],
+        "message": result["message"],
+    }
+
+
+@mcp.tool()
+def wallet_balance(wallet_id: str) -> dict:
+    """Check RTC token balance for a local wallet.
+
+    Queries the RustChain network for the balance of a wallet
+    stored in the local keystore.
+
+    Args:
+        wallet_id: The wallet ID to check (e.g., "my-agent", "trading-bot")
+
+    Returns balance in RTC tokens and USD equivalent ($0.10/RTC).
+    """
+    # First check if wallet exists in local keystore
+    wallet = rustchain_crypto.load_wallet(wallet_id)
+    if wallet is None:
+        # Try querying by address directly
+        pass
+    
+    r = get_client().get(f"{RUSTCHAIN_NODE}/balance", params={"miner_id": wallet_id})
+    r.raise_for_status()
+    return r.json()
+
+
+@mcp.tool()
+def wallet_history(wallet_id: str, limit: int = 20) -> dict:
+    """Get transaction history for a wallet.
+
+    Retrieves recent transactions for the specified wallet from
+    the RustChain network.
+
+    Args:
+        wallet_id: The wallet ID to get history for
+        limit: Maximum number of transactions to return (default: 20, max: 100)
+
+    Returns list of transactions with type, amount, timestamp, and counterparty.
+    """
+    wallet = rustchain_crypto.load_wallet(wallet_id)
+    address = wallet["address"] if wallet else wallet_id
+    
+    r = get_client().get(
+        f"{RUSTCHAIN_NODE}/wallet/history",
+        params={"address": address, "limit": min(limit, 100)},
+    )
+    r.raise_for_status()
+    return r.json()
+
+
+@mcp.tool()
+def wallet_transfer_signed(
+    from_wallet_id: str,
+    to_address: str,
+    amount_rtc: float,
+    password: str = "",
+    memo: str = "",
+) -> dict:
+    """Sign and submit an RTC transfer from a local wallet.
+
+    Loads the private key from the encrypted keystore, signs the
+    transfer transaction with Ed25519, and submits to the network.
+
+    Args:
+        from_wallet_id: Source wallet ID (must exist in local keystore)
+        to_address: Destination RTC address (e.g., "RTCabc123...")
+        amount_rtc: Amount to transfer in RTC
+        password: Password to decrypt the keystore (if set during creation)
+        memo: Optional memo for the transaction
+
+    Returns transfer result with transaction ID and new balance.
+    """
+    # Load wallet from keystore
+    wallet = rustchain_crypto.load_wallet(from_wallet_id, password)
+    if wallet is None:
+        return {
+            "error": f"Wallet '{from_wallet_id}' not found or incorrect password",
+            "hint": "Use wallet_list to see available wallets",
+        }
+    
+    # Sign the transfer message
+    transfer_message = f"{wallet['address']}:{to_address}:{amount_rtc}:{memo}:{int(time.time() * 1000)}".encode()
+    signature = rustchain_crypto.sign_message(transfer_message, wallet["private_key"])
+    
+    # Submit signed transfer to network
+    result = rustchain_transfer_signed(
+        from_address=wallet["address"],
+        to_address=to_address,
+        amount_rtc=amount_rtc,
+        signature=signature,
+        public_key=wallet["public_key"],
+        memo=memo,
+    )
+    
+    return {
+        "success": True,
+        "transaction_id": result.get("transaction_id"),
+        "from_address": wallet["address"],
+        "to_address": to_address,
+        "amount_rtc": amount_rtc,
+        "memo": memo,
+        "new_balance": result.get("new_balance"),
+    }
+
+
+@mcp.tool()
+def wallet_list() -> dict:
+    """List all wallets in the local keystore.
+
+    Returns information about all wallets stored in
+    ~/.rustchain/mcp_wallets/ directory.
+
+    Returns list of wallets with wallet_id, address, and creation time.
+    NOTE: Private keys and seed phrases are NEVER exposed!
+    """
+    wallets = rustchain_crypto.list_wallets()
+    return {
+        "total_wallets": len(wallets),
+        "wallets": wallets,
+        "keystore_path": str(rustchain_crypto.get_keystore_path()),
+    }
+
+
+@mcp.tool()
+def wallet_export(password: str = "") -> dict:
+    """Export encrypted keystore JSON for backup.
+
+    Creates an encrypted backup of all wallets in the local keystore.
+    The export is encrypted with the provided password.
+
+    Args:
+        password: Password to encrypt the export (default: "rustchain-mcp-export")
+
+    Returns encrypted keystore JSON (base64-encoded) and wallet count.
+    STORE THIS SECURELY - it contains all your wallet data!
+    """
+    result = rustchain_crypto.export_keystore(password)
+    return {
+        "encrypted_keystore": result["encrypted_keystore"],
+        "wallet_count": result["wallet_count"],
+        "message": result["message"],
+        "warning": "Store this encrypted backup securely! Anyone with this and the password can access your wallets.",
+    }
+
+
+@mcp.tool()
+def wallet_import(
+    source: str,
+    wallet_id: str = "",
+    password: str = "",
+) -> dict:
+    """Import a wallet from seed phrase or keystore JSON.
+
+    Args:
+        source: Either a BIP39 seed phrase (12-24 words) or
+                encrypted keystore JSON string from wallet_export
+        wallet_id: Desired wallet ID (optional, auto-generated if not provided)
+        password: Password for encrypted keystore or seed phrase
+
+    Returns imported wallet info (wallet_id, address).
+    """
+    result = rustchain_crypto.import_wallet(source, wallet_id, password)
+    return result
+
+
+@mcp.tool()
+def bcos_verify(cert_id: str) -> dict:
+    """Verify a BCOS v2 certificate by its ID.
+
+    Args:
+        cert_id: The certificate ID to verify (e.g., "bcos_abc123...")
+
+    Returns verification result including certificate validity,
+    issuer, subject, and chain status.
+    """
+    r = get_client().get(f"{RUSTCHAIN_NODE}/bcos/verify/{cert_id}")
+    r.raise_for_status()
+    return r.json()
+
+
 @mcp.tool()
 def rustchain_stats() -> dict:
     """Get RustChain network statistics.
@@ -167,21 +375,6 @@ def rustchain_lottery_eligibility(miner_id: str) -> dict:
         f"{RUSTCHAIN_NODE}/lottery/eligibility",
         params={"miner_id": miner_id},
     )
-    r.raise_for_status()
-    return r.json()
-
-
-@mcp.tool()
-def bcos_verify(cert_id: str) -> dict:
-    """Verify a BCOS v2 certificate by its ID.
-
-    Args:
-        cert_id: The certificate ID to verify (e.g., "bcos_abc123...")
-
-    Returns verification result including certificate validity,
-    issuer, subject, and chain status.
-    """
-    r = get_client().get(f"{RUSTCHAIN_NODE}/bcos/verify/{cert_id}")
     r.raise_for_status()
     return r.json()
 

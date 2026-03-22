@@ -81,12 +81,16 @@ server.run()
 
 ## Available Tools
 
-### Wallet Management
-- `create_wallet` - Generate new wallet with encrypted storage
-- `get_balance` - Check RTC balance for any address
-- `transfer_rtc` - Send RTC tokens between wallets
+### Wallet Management (7 tools) — NEW in v0.4.0
+- `wallet_create` — Generate new Ed25519 wallet with BIP39 seed phrase
+- `wallet_balance` — Check RTC balance for any wallet ID
+- `wallet_history` — Get transaction history for a wallet
+- `wallet_transfer_signed` — Sign and submit an RTC transfer
+- `wallet_list` — List wallets in local keystore
+- `wallet_export` — Export encrypted keystore JSON for backup
+- `wallet_import` — Import from seed phrase or keystore JSON
 
-### Blockchain Data
+### RustChain (8 tools)
 - `get_miners` - View active miners and their stats
 - `get_epoch_info` - Current epoch details and rewards
 - `get_bounties` - List available bounties with rewards
@@ -152,6 +156,45 @@ send_message(
 )
 ```
 
+### Wallet Management (v0.4.0+)
+
+```python
+# Create a new wallet with Ed25519 cryptography
+wallet = wallet_create(agent_name="my-trading-bot")
+print(f"Wallet address: {wallet['address']}")
+# Output: Wallet address: RTCa1b2c3d4...
+
+# List all wallets in local keystore
+wallets = wallet_list()
+print(f"Total wallets: {wallets['total_wallets']}")
+
+# Check balance
+balance = wallet_balance(wallet_id="my-trading-bot")
+print(f"Balance: {balance['rtc']} RTC")
+
+# Transfer RTC (signed with Ed25519)
+result = wallet_transfer_signed(
+    from_wallet_id="my-trading-bot",
+    to_address="RTCabc123...",
+    amount_rtc=10.0,
+    password="optional-password",
+    memo="Payment for services"
+)
+print(f"Transaction ID: {result['transaction_id']}")
+
+# Export encrypted backup
+backup = wallet_export(password="backup-password")
+print(f"Exported {backup['wallet_count']} wallets")
+# Store backup['encrypted_keystore'] securely!
+
+# Import from seed phrase
+imported = wallet_import(
+    source="abandon ability able about above absent absorb abstract absurd abuse access accident",
+    wallet_id="imported-wallet"
+)
+print(f"Imported wallet: {imported['address']}")
+```
+
 ## Configuration Options
 
 ### Environment Variables
@@ -184,11 +227,14 @@ export BEACON_MESSAGE_RETENTION="30d"
 
 ## Security
 
-- 🔒 **Private keys** are encrypted at rest using AES-256
+- 🔒 **Private keys** are encrypted at rest using AES-256 (via Fernet)
+- 📁 **Keystore location**: `~/.rustchain/mcp_wallets/` (permissions: 0700)
+- 🔐 **File permissions**: Wallet files have 0600 permissions (owner read/write only)
 - 🛡️ **API keys** are never logged or transmitted in plaintext
 - 🔐 **Message encryption** for sensitive agent communications
 - ⚡ **Rate limiting** prevents abuse and ensures fair usage
 - 🎯 **Scoped permissions** limit agent actions to authorized operations
+- 🚫 **No seed phrase exposure**: Seed phrases are encrypted and never returned in tool responses
 
 ## Troubleshooting
 
