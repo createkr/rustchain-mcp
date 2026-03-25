@@ -18,7 +18,6 @@ import os
 import shutil
 import tempfile
 from pathlib import Path
-from typing import Any
 from unittest import mock
 
 import pytest
@@ -34,7 +33,6 @@ from rustchain_mcp import rustchain_crypto
 def temp_keystore():
     """Create a temporary keystore directory for testing."""
     temp_dir = tempfile.mkdtemp()
-    original_path = rustchain_crypto.get_keystore_path()
     
     # Mock the keystore path
     with mock.patch.object(

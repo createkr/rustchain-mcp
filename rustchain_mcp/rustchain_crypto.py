@@ -33,7 +33,6 @@ except ImportError:
 # Alternative: use nacl (PyNaCl) if available
 try:
     import nacl.signing as nacl_signing
-    import nacl.encoding as nacl_encoding
     NACL_AVAILABLE = True
 except ImportError:
     NACL_AVAILABLE = False
